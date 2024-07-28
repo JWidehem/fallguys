@@ -1,10 +1,17 @@
 import {
-  isHost,
   Joystick,
+  isHost,
   onPlayerJoin,
   useMultiplayerState,
 } from "playroomkit";
-import { createContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { randFloat } from "three/src/math/MathUtils.js";
+import {
+  HEX_X_SPACING,
+  HEX_Z_SPACING,
+  NB_COLUMNS,
+  NB_ROWS,
+} from "../components/GameArena";
 
 const GameStateContext = createContext();
 
@@ -12,7 +19,7 @@ const NEXT_STAGE = {
   lobby: "countdown",
   countdown: "game",
   game: "winner",
-  results: "lobby",
+  winner: "lobby",
 };
 
 const TIMER_STAGE = {
@@ -22,9 +29,10 @@ const TIMER_STAGE = {
   winner: 5,
 };
 
-export const GameStateContextProvider = ({ children }) => {
+export const GameStateProvider = ({ children }) => {
+  const [winner, setWinner] = useMultiplayerState("winner", null);
   const [stage, setStage] = useMultiplayerState("gameStage", "lobby");
-  const [timer, setTimer] = useMultiplayerState("gameTimer", TIMER_STAGE.lobby);
+  const [timer, setTimer] = useMultiplayerState("timer", TIMER_STAGE.lobby);
   const [players, setPlayers] = useState([]);
   const [soloGame, setSoloGame] = useState(false);
 
@@ -41,6 +49,20 @@ export const GameStateContextProvider = ({ children }) => {
         buttons: [{ id: "Jump", label: "Jump" }],
       });
       const newPlayer = { state, controls };
+
+      if (host) {
+        state.setState("dead", stage === "game");
+        state.setState("startingPos", {
+          x: randFloat(
+            (-(NB_COLUMNS - 1) * HEX_X_SPACING) / 2,
+            ((NB_COLUMNS - 1) * HEX_X_SPACING) / 2
+          ),
+          z: randFloat(
+            (-(NB_ROWS - 1) * HEX_Z_SPACING) / 2,
+            ((NB_ROWS - 1) * HEX_Z_SPACING) / 2
+          ),
+        });
+      }
 
       setPlayers((players) => [...players, newPlayer]);
       state.onQuit(() => {
@@ -60,8 +82,26 @@ export const GameStateContextProvider = ({ children }) => {
       let newTime = stage === "game" ? timer + 1 : timer - 1;
       if (newTime === 0) {
         const nextStage = NEXT_STAGE[stage];
+        if (nextStage === "lobby" || nextStage === "countdown") {
+          // RESET PLAYERS
+          players.forEach((p) => {
+            p.state.setState("dead", false);
+            p.state.setState("pos", null);
+            p.state.setState("rot", null);
+          });
+        }
         setStage(nextStage, true);
         newTime = TIMER_STAGE[nextStage];
+      } else {
+        // CHECK GAME END
+        if (stage === "game") {
+          const playersAlive = players.filter((p) => !p.state.getState("dead"));
+          if (playersAlive.length < (soloGame ? 1 : 2)) {
+            setStage("winner", true);
+            setWinner(playersAlive[0]?.state.state.profile, true);
+            newTime = TIMER_STAGE.winner;
+          }
+        }
       }
       setTimer(newTime, true);
     }, 1000);
@@ -71,7 +111,7 @@ export const GameStateContextProvider = ({ children }) => {
   const startGame = () => {
     setStage("countdown");
     setTimer(TIMER_STAGE.countdown);
-    setSoloGame(players.lenght === 1);
+    setSoloGame(players.length === 1);
   };
 
   return (
@@ -92,9 +132,7 @@ export const GameStateContextProvider = ({ children }) => {
 export const useGameState = () => {
   const context = useContext(GameStateContext);
   if (!context) {
-    throw new Error(
-      "useGameState must be used within a GameStateContextProvider"
-    );
+    throw new Error("useGameState must be used within a GameStateProvider");
   }
   return context;
 };
